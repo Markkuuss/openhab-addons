@@ -17,6 +17,7 @@ import static org.openhab.binding.miio.internal.MiIoBindingConstants.*;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jdt.annotation.NonNullByDefault;
@@ -28,6 +29,9 @@ import org.eclipse.smarthome.core.library.types.StringType;
 import org.eclipse.smarthome.core.thing.ChannelUID;
 import org.eclipse.smarthome.core.thing.Thing;
 import org.eclipse.smarthome.core.thing.ThingStatusDetail;
+import org.eclipse.smarthome.core.thing.binding.builder.ChannelBuilder;
+import org.eclipse.smarthome.core.thing.binding.builder.ThingBuilder;
+import org.eclipse.smarthome.core.thing.type.ChannelTypeUID;
 import org.eclipse.smarthome.core.types.Command;
 import org.eclipse.smarthome.core.types.RefreshType;
 import org.eclipse.smarthome.core.types.State;
@@ -52,6 +56,7 @@ import com.google.gson.JsonElement;
  * @author Marcel Verpaalen - Initial contribution
  */
 public class MiIoVacuumHandler extends MiIoAbstractHandler {
+    private static final String WATER_BOX_PROPERTY = "hasWaterBox";
     private final Logger logger = LoggerFactory.getLogger(MiIoVacuumHandler.class);
 
     private ExpiringCache<String> status;
@@ -60,9 +65,32 @@ public class MiIoVacuumHandler extends MiIoAbstractHandler {
     private ExpiringCache<String> history;
     private String lastHistoryId;
 
+    private boolean hasWaterBox = false;
+
     @NonNullByDefault
     public MiIoVacuumHandler(Thing thing) {
         super(thing);
+    }
+
+    @Override
+    public void initialize() {
+        super.initialize();
+        Map<String, String> properties = thing.getProperties();
+        hasWaterBox = Boolean.valueOf(properties.getOrDefault(WATER_BOX_PROPERTY, Boolean.FALSE.toString()));
+
+        if (hasWaterBox && thing.getChannel(CHANNEL_WATER_BOX_CARRIAGE_STATUS) == null) {
+            logger.debug("Adding {} channel to thing {}", CHANNEL_WATER_BOX_CARRIAGE_STATUS, thing.getUID());
+            ThingBuilder thingBuilder = editThing();
+            thingBuilder.withChannel(
+                    ChannelBuilder.create(new ChannelUID(thing.getUID(), CHANNEL_WATER_BOX_CARRIAGE_STATUS), "Switch")
+                            .withType(new ChannelTypeUID(BINDING_ID, "water_box_carriage_status")).build());
+            updateThing(thingBuilder.build());
+        } else if (!hasWaterBox && thing.getChannel(CHANNEL_WATER_BOX_CARRIAGE_STATUS) != null) {
+            logger.debug("Removing {} channel from thing {}", CHANNEL_WATER_BOX_CARRIAGE_STATUS, thing.getUID());
+            ThingBuilder thingBuilder = editThing();
+            thingBuilder.withoutChannel(new ChannelUID(thing.getUID(), CHANNEL_WATER_BOX_CARRIAGE_STATUS));
+            updateThing(thingBuilder.build());
+        }
     }
 
     @Override
@@ -187,18 +215,20 @@ public class MiIoVacuumHandler extends MiIoAbstractHandler {
             updateState(CHANNEL_CONTROL, new StringType(control));
         }
         updateState(CHANNEL_VACUUM, vacuum);
-        JsonElement statusWaterBox = statusData.get("water_box_status");
-        if (statusWaterBox == null) {
-            updateState(CHANNEL_WATER_BOX_STATUS, OnOffType.OFF);
-        } else {
-            updateState(CHANNEL_WATER_BOX_STATUS, new DecimalType(statusWaterBox.getAsBigDecimal()));
+
+        Boolean statusWaterBox = statusData.get("water_box_status") != null;
+        if (statusWaterBox != hasWaterBox) {
+            // reported and stored waterbox status are different
+            Map<String, String> properties = editProperties();
+            properties.put(WATER_BOX_PROPERTY, statusWaterBox.toString());
+            updateProperties(properties);
         }
-        JsonElement statusWaterBoxCarriage = statusData.get("water_box_carriage_status");
-        if (statusWaterBoxCarriage == null) {
-            updateState(CHANNEL_WATER_BOX_CARRIAGE_STATUS, OnOffType.OFF);
-        } else {
+
+        if (hasWaterBox) {
+            JsonElement statusWaterBoxCarriage = statusData.get("water_box_carriage_status");
             updateState(CHANNEL_WATER_BOX_CARRIAGE_STATUS, new DecimalType(statusWaterBoxCarriage.getAsBigDecimal()));
         }
+
         return true;
     }
 
